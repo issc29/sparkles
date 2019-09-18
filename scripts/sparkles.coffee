@@ -16,7 +16,8 @@ module.exports = (robot) ->
     output = (date.getMonth() + 1) + "/" + date.getDate() + "/" + date.getFullYear()
     return output
 
-  server = "http://sparklies.herokuapp.com/"
+  server = process.env.SPARKLES_SERVER
+
 
   robot.respond /sparkle party$/i, (msg) ->
     url = server + "sparkles"

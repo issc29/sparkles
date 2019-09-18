@@ -8,20 +8,41 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"fmt"
+	"net/url"
+	"context"
 
-	"launchpad.net/goamz/aws"
-	"launchpad.net/goamz/s3"
+   
+	
+	"github.com/Azure/azure-storage-blob-go/azblob"
 )
 
-// HA HA, joke's on you! ENTIRE DB IS FILE!
+var filename = getEnv("SPARKLE_FILENAME", "sparkledb")     // "sparkledb"
 
-var filename = os.Getenv("SPARKLE_FILENAME")     // "sparkledb"
-var bucketName = os.Getenv("SPARKLE_BUCKETNAME") // "mister-sparkleo"
+func getEnv(key, fallback string) string {
+    if value, ok := os.LookupEnv(key); ok {
+        return value
+    }
+    return fallback
+}
 
 // SparkleDatabase holds all the sparkle data
 type SparkleDatabase struct {
 	Sparkles   []Sparkle
 	UnSparkles []Sparkle
+}
+
+func handleErrors(err error) {
+	if err != nil {
+		if serr, ok := err.(azblob.StorageError); ok { // This error is a Service-specific
+			switch serr.ServiceCode() { // Compare serviceCode to ServiceCodeXxx constants
+			case azblob.ServiceCodeContainerAlreadyExists:
+				fmt.Println("Received 409. Container already exists")
+				return
+			}
+		}
+		log.Fatal(err)
+	}
 }
 
 // Save the database
@@ -34,55 +55,99 @@ func (s *SparkleDatabase) Save() {
 		panic(err)
 	}
 
-	// The AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables are used.
-	auth, err := aws.EnvAuth()
-	if err != nil {
-		panic(err.Error())
+	// From the Azure portal, get your storage account name and key and set environment variables.
+	accountName, accountKey := os.Getenv("AZURE_STORAGE_ACCOUNT"), os.Getenv("AZURE_STORAGE_ACCESS_KEY")
+	if len(accountName) == 0 || len(accountKey) == 0 {
+		log.Fatal("Either the AZURE_STORAGE_ACCOUNT or AZURE_STORAGE_ACCESS_KEY environment variable is not set")
 	}
 
-	// Open Bucket
-	s3Connection := s3.New(auth, aws.USEast)
-
-	// Load the database from an S3 bucket
-	bucket := s3Connection.Bucket(bucketName)
-
-	err = bucket.Put(filename, data.Bytes(), "text/plain", s3.BucketOwnerFull)
+	// Create a default request pipeline using your storage account name and account key.
+	credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
 	if err != nil {
-		panic(err.Error())
+		log.Fatal("Invalid credentials with error: " + err.Error())
 	}
+	p := azblob.NewPipeline(credential, azblob.PipelineOptions{})
+
+	// Create a random string for the quick start container
+	containerName := "sparkles"
+
+	URL, _ := url.Parse(
+		fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, containerName))
+
+	// Create a ContainerURL object that wraps the container URL and a request
+	// pipeline to make requests.
+	containerURL := azblob.NewContainerURL(*URL, p)
+
+	// Here's how to upload a blob.
+	blobURL := containerURL.NewBlockBlobURL(filename)
+
+	ctx := context.Background() // This example uses a never-expiring context
+
+	// The high-level API UploadFileToBlockBlob function uploads blocks in parallel for optimal performance, and can handle large files as well.
+	// This function calls PutBlock/PutBlockList for files larger 256 MBs, and calls PutBlob for any file smaller
+	fmt.Printf("Uploading the file with blob name: %s\n", filename)
+	_, err = azblob.UploadBufferToBlockBlob(ctx, data.Bytes(), blobURL, azblob.UploadToBlockBlobOptions{
+		BlockSize:   4 * 1024 * 1024,
+		Parallelism: 16})
+	handleErrors(err)
+
 }
 
 // LoadDB loads the SparkleDatabase from S3
 func LoadDB() SparkleDatabase {
-	// The AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables are used.
-	auth, err := aws.EnvAuth()
-	if err != nil {
-		panic(err.Error())
+
+
+	// From the Azure portal, get your storage account name and key and set environment variables.
+	accountName, accountKey := os.Getenv("AZURE_STORAGE_ACCOUNT"), os.Getenv("AZURE_STORAGE_ACCESS_KEY")
+	if len(accountName) == 0 || len(accountKey) == 0 {
+		log.Fatal("Either the AZURE_STORAGE_ACCOUNT or AZURE_STORAGE_ACCESS_KEY environment variable is not set")
 	}
 
-	// Open Bucket
-	s := s3.New(auth, aws.USEast)
-
-	// Load the database from an S3 bucket
-	bucket := s.Bucket(bucketName)
-
-	// Create a bytes.Buffer
-	n, err := bucket.Get(filename)
+	// Create a default request pipeline using your storage account name and account key.
+	credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
 	if err != nil {
-		panic(err)
+		log.Fatal("Invalid credentials with error: " + err.Error())
+	}
+	p := azblob.NewPipeline(credential, azblob.PipelineOptions{})
+
+	// Create a random string for the quick start container
+	containerName := "sparkles"
+
+	URL, _ := url.Parse(
+		fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, containerName))
+
+	// Create a ContainerURL object that wraps the container URL and a request
+	// pipeline to make requests.
+	containerURL := azblob.NewContainerURL(*URL, p)
+
+	// Here's how to download a blob.
+	blobURL := containerURL.NewBlobURL("sparkledb")
+	ctx := context.Background() // This example uses a never-expiring context
+	
+	blobProperties, err := blobURL.GetProperties(ctx, azblob.BlobAccessConditions{})
+	handleErrors(err)
+	buf := make([]byte, blobProperties.ContentLength())
+    err = azblob.DownloadBlobToBuffer(ctx, blobURL, 0, 0, buf, azblob.DownloadFromBlobOptions{
+		BlockSize:   4 * 1024 * 1024,
+		Parallelism: 16})
+	//handleErrors(err)
+	if err != nil { 
+		log.Println(fmt.Println(err))
 	}
 
-	p := bytes.NewBuffer(n)
-	dec := gob.NewDecoder(p)
+	body := bytes.NewReader(buf)
+	dec := gob.NewDecoder(body)
 
 	var sparkleDB SparkleDatabase
 	err = dec.Decode(&sparkleDB)
 
 	if err != nil {
 		log.Print("There was an error loading the sparkle database. Using a blank one.")
+		log.Print(err)
 	}
 
 	return sparkleDB
+	
 }
 
 // AddSparkle adds a sparkle to the database and returns a Leader record

@@ -77,14 +77,6 @@ module.exports = (robot) ->
     body = msg.match[1].split(" ")
     recipient = _.first(body)
     reason = _.rest(body).join(" ")
-    if recipient.match(/^scottjg/i)
-      msg.send "scottjg doesn't want your fucking sparkles. get back to work."
-      msg.finish()
-      return
-    else if recipient.match(/^dreww/i)
-      msg.send "http://f.cl.ly/items/0N3t2B1i091Z3y3e2g1E/drew-disappoint-loop.gif"
-      msg.finish()
-      return
 
     sparkle = { "sparkler": msg.message.user.name.toLowerCase(), "sparklee": recipient.toLowerCase(), "reason": reason, "room": msg.message.room}
     msg.finish()
